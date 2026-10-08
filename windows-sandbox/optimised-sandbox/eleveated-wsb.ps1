@@ -1,0 +1,1 @@
+powershell.exe -Command "Start-Process 'C:\Windows\System32\WindowsSandbox.exe' -Verb RunAs -ArgumentList 'C:\Users\user\Files\Sandbox\elevated-wsb'"
