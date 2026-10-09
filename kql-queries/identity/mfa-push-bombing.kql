@@ -1,0 +1,50 @@
+// Repeated MFA denials, then an approval
+// MITRE ATT&CK:    T1621 Multi-Factor Authentication Request Generation
+// Summary:         Splits each user's MFA prompts into bursts then flags bursts with several denied or ignored prompts.
+// Change the let variables as required
+let lookback = 30d;
+let deniedThreshold = 5;
+let maxBurstLength  = 1h;
+let maxGap          = 10m;
+SigninLogs
+| where TimeGenerated > ago(lookback)
+| where AuthenticationRequirement == "multiFactorAuthentication"
+| extend DeviceDetail = todynamic(DeviceDetail)
+| mv-expand AuthStep = todynamic(AuthenticationDetails)
+| extend AuthResult = tostring(AuthStep.authenticationStepResultDetail)
+| extend
+    IsDenied  = AuthResult has "MFA denied",
+    IsFraud   = AuthResult has "fraud",
+    IsSuccess = AuthResult == "MFA successfully completed"
+| where IsDenied or IsSuccess
+| sort by UserPrincipalName asc, TimeGenerated asc
+| extend BurstStart = row_window_session(TimeGenerated, maxBurstLength, maxGap,
+                          UserPrincipalName != prev(UserPrincipalName))
+| summarize
+    StartTime     = min(TimeGenerated),
+    EndTime       = max(TimeGenerated),
+    DeniedPrompts = countif(IsDenied),
+    FraudReports  = countif(IsFraud),
+    Approvals     = countif(IsSuccess),
+    FirstDenial   = minif(TimeGenerated, IsDenied),
+    LastApproval  = maxif(TimeGenerated, IsSuccess),
+    DenialReasons = make_set_if(AuthResult, IsDenied, 5),
+    IPAddresses   = make_set(IPAddress, 10),
+    Countries     = make_set(Location, 5),
+    Apps          = make_set(AppDisplayName, 5),
+    OS            = make_set(tostring(DeviceDetail.operatingSystem), 5),
+    Browsers      = make_set(tostring(DeviceDetail.browser), 5)
+    by UserPrincipalName, BurstStart
+| where DeniedPrompts >= deniedThreshold
+| extend ApprovedAfterDenials = LastApproval > FirstDenial
+| extend
+    BurstMinutes = datetime_diff("minute", EndTime, StartTime),
+    Severity     = iff(ApprovedAfterDenials == true, "High", "Medium"),
+    Name         = tostring(split(UserPrincipalName, "@")[0]),
+    UPNSuffix    = tostring(split(UserPrincipalName, "@")[1])
+| project
+    Severity, UserPrincipalName, StartTime, EndTime, BurstMinutes,
+    DeniedPrompts, FraudReports, Approvals, ApprovedAfterDenials,
+    DenialReasons, IPAddresses, Countries, Apps, OS, Browsers,
+    Name, UPNSuffix
+| order by Severity asc, DeniedPrompts desc
