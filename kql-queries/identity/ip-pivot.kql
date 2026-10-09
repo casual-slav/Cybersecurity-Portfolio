@@ -1,0 +1,22 @@
+// IP Pivot: Account activity from a suspicious IP address
+// MITRE ATT&CK:    T1078 Valid Accounts
+//                  T1110 Brute Force
+// Use case:        An alert flags an IP. Which accounts did it touch, and did any logons succeed?
+// Change the IP and lookback as required
+let suspiciousIP = "0.0.0.0";
+let lookback = 30d;
+IdentityLogonEvents
+| where Timestamp > ago(lookback)
+| where IPAddress == suspiciousIP
+| summarize
+    FirstSeen      = min(Timestamp),
+    LastSeen       = max(Timestamp),
+    TotalLogons    = count(),
+    Successful     = countif(ActionType == "LogonSuccess"),
+    Failed         = countif(ActionType == "LogonFailed"),
+    Devices        = make_set(DeviceName, 10),
+    Protocols      = make_set(Protocol),
+    LogonTypes     = make_set(LogonType),
+    FailureReasons = make_set(FailureReason, 5)
+    by AccountUpn, AccountName
+| order by Successful desc, Failed desc
